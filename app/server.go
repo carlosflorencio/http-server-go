@@ -57,6 +57,8 @@ func handlers(req *Request, res *Response) {
 	switch {
 	case req.path == "/":
 		res.status = 200
+	case req.path == "/user-agent":
+		res.body = []byte(req.headers.Get("User-Agent"))
 	case echoPattern.MatchString(req.path):
 		params := echoPattern.FindStringSubmatch(req.path)
 

@@ -4,21 +4,26 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/textproto"
-	"os"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
+const (
+	PORT = 4221
+)
+
 func main() {
-	listener, err := net.Listen("tcp", "localhost:4221")
+	listener, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", PORT))
 	if err != nil {
-		fmt.Println("Failed to bind to port 4221")
-		os.Exit(1)
+		log.Fatal("Failed to bind to port ", PORT)
 	}
 	defer listener.Close()
 
-	fmt.Println("Server listening on port 4221")
+	fmt.Println("Server listening on port ", PORT)
 
 	for {
 		conn, err := listener.Accept()
@@ -34,19 +39,37 @@ func main() {
 func handleClient(conn net.Conn) {
 	defer conn.Close()
 
-	req, err := convertRequest(conn)
+	req, err := NewRequest(conn)
 	if err != nil {
 		fmt.Println("Error converting request: ", err.Error())
 	}
 
-	if req.path == "/" {
-		conn.Write([]byte("HTTP/1.1 200 OK\r\n\r\n"))
-	} else {
-		conn.Write([]byte("HTTP/1.1 404 Not Found\r\n\r\n"))
+	res := NewResponse(req)
+
+	handlers(req, res)
+
+	res.Send(conn)
+}
+
+func handlers(req *Request, res *Response) {
+	echoPattern := regexp.MustCompile(`/echo/(.*)`)
+
+	switch {
+	case req.path == "/":
+		res.status = 200
+	case echoPattern.MatchString(req.path):
+		params := echoPattern.FindStringSubmatch(req.path)
+
+		res.status = 200
+		if len(params) > 1 && len(params[1]) > 0 {
+			res.body = []byte(params[1])
+		}
+	default:
+		res.status = 404
 	}
 }
 
-type request struct {
+type Request struct {
 	proto   string
 	method  string
 	path    string
@@ -54,11 +77,11 @@ type request struct {
 	headers textproto.MIMEHeader
 }
 
-func convertRequest(conn net.Conn) (*request, error) {
+func NewRequest(conn net.Conn) (*Request, error) {
 	reader := bufio.NewReader(conn)
 	text := textproto.NewReader(reader)
 
-	req := new(request)
+	req := new(Request)
 
 	// parse first line, GET / HTTP/1.1
 	line, err := text.ReadLine()
@@ -84,4 +107,44 @@ func convertRequest(conn net.Conn) (*request, error) {
 	}
 
 	return nil, errors.New("Unsupported method: " + req.method)
+}
+
+type Response struct {
+	req     *Request
+	status  int
+	body    []byte
+	headers textproto.MIMEHeader
+}
+
+func NewResponse(req *Request) *Response {
+	return &Response{
+		req: req,
+		headers: textproto.MIMEHeader{
+			"Content-Type": []string{"text/plain"},
+		},
+		status: 200,
+	}
+}
+
+func (r *Response) Send(conn net.Conn) {
+	payload := r.req.proto + " " + strconv.Itoa(r.status) + " " + r.StatusString() + "\r\n"
+
+	for key, value := range r.headers {
+		payload += key + ": " + value[0] + "\r\n"
+	}
+
+	payload += "Content-Length: " + strconv.Itoa(len(r.body)) + "\r\n\r\n" + string(r.body)
+
+	conn.Write([]byte(payload))
+}
+
+func (r *Response) StatusString() string {
+	switch r.status {
+	case 200:
+		return "OK"
+	case 404:
+		return "Not Found"
+	default:
+		return "Unknown"
+	}
 }

@@ -7,23 +7,34 @@ import (
 	"log"
 	"net"
 	"net/textproto"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 )
 
 const (
-	PORT = 4221
+	Port = 4221
+)
+
+var (
+	Directory string
 )
 
 func main() {
-	listener, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", PORT))
+	if len(os.Args) == 3 {
+		fmt.Println("Path received", os.Args[2])
+		Directory = os.Args[2]
+	}
+
+	listener, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", Port))
 	if err != nil {
-		log.Fatal("Failed to bind to port ", PORT)
+		log.Fatal("Failed to bind to port ", Port)
 	}
 	defer listener.Close()
 
-	fmt.Println("Server listening on port ", PORT)
+	fmt.Println("Server listening on port ", Port)
 
 	for {
 		conn, err := listener.Accept()
@@ -53,16 +64,23 @@ func handleClient(conn net.Conn) {
 
 func handlers(req *Request, res *Response) {
 	echoPattern := regexp.MustCompile(`/echo/(.*)`)
+	filesPattern := regexp.MustCompile(`/files/(.*)`)
 
 	switch {
 	case req.path == "/":
-		res.status = 200
+	case filesPattern.MatchString(req.path):
+		params := filesPattern.FindStringSubmatch(req.path)
+
+		if len(params) > 1 && len(params[1]) > 0 {
+			res.ServeFile(params[1])
+		} else {
+			res.status = 404
+		}
 	case req.path == "/user-agent":
 		res.body = []byte(req.headers.Get("User-Agent"))
 	case echoPattern.MatchString(req.path):
 		params := echoPattern.FindStringSubmatch(req.path)
 
-		res.status = 200
 		if len(params) > 1 && len(params[1]) > 0 {
 			res.body = []byte(params[1])
 		}
@@ -149,4 +167,23 @@ func (r *Response) StatusString() string {
 	default:
 		return "Unknown"
 	}
+}
+
+func (r *Response) ServeFile(fileName string) {
+	path := filepath.Join(Directory, fileName)
+
+	_, err := os.Stat(path)
+	if err != nil {
+		r.status = 404
+		return
+	}
+
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		r.status = 404
+		return
+	}
+
+	r.headers["Content-Type"] = []string{"application/octet-stream"}
+	r.body = contents
 }

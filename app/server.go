@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/textproto"
@@ -72,7 +73,12 @@ func handlers(req *Request, res *Response) {
 		params := filesPattern.FindStringSubmatch(req.path)
 
 		if len(params) > 1 && len(params[1]) > 0 {
-			res.ServeFile(params[1])
+
+			if req.method == "GET" {
+				res.ServeFile(params[1])
+			} else {
+				res.WriteFile(params[1], req.body)
+			}
 		} else {
 			res.status = 404
 		}
@@ -126,7 +132,23 @@ func NewRequest(conn net.Conn) (*Request, error) {
 		return req, nil
 	}
 
-	return nil, errors.New("Unsupported method: " + req.method)
+	if len(req.headers["Content-Length"]) == 0 {
+		return nil, errors.New("no content length")
+	}
+
+	length, err := strconv.Atoi(req.headers["Content-Length"][0])
+	if err != nil {
+		return nil, err
+	}
+
+	body := make([]byte, length)
+	if _, err = io.ReadFull(reader, body); err != nil {
+		return nil, err
+	}
+
+	req.body = body
+
+	return req, nil
 }
 
 type Response struct {
@@ -186,4 +208,17 @@ func (r *Response) ServeFile(fileName string) {
 
 	r.headers["Content-Type"] = []string{"application/octet-stream"}
 	r.body = contents
+}
+
+func (r *Response) WriteFile(fileName string, contents []byte) {
+	path := filepath.Join(Directory, fileName)
+
+	err := os.WriteFile(path, contents, 0666)
+	if err != nil {
+		r.status = 500
+		r.body = []byte(err.Error())
+		return
+	}
+
+	r.status = 201
 }
